@@ -52,7 +52,7 @@
         const objectCount = document.getElementById('object-count');
 
         // Access the user's camera
-        navigator.mediaDevices.getUserMedia({ video: true })
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
             .then(stream => {
                 video.srcObject = stream;
             })
