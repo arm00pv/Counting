@@ -1,9 +1,10 @@
 # Backend server for the computer vision web app
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 import cv2
 import numpy as np
 from werkzeug.utils import secure_filename
 import os
+import base64
 
 app = Flask(__name__)
 
@@ -16,27 +17,32 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route('/', methods=['GET', 'POST'])
-def upload_file():
-    if request.method == 'POST':
-        # Check if the post request has the file part
-        if 'file' not in request.files:
-            return render_template('index.html', error='No file part')
-        file = request.files['file']
-        # If the user does not select a file, the browser submits an
-        # empty file without a filename.
-        if file.filename == '':
-            return render_template('index.html', error='No selected file')
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-
-            # Process the image for object counting
-            processed_image_path, count = process_image(filepath)
-
-            return render_template('index.html', filename=processed_image_path, count=count)
+@app.route('/')
+def index():
     return render_template('index.html')
+
+@app.route('/process_frame', methods=['POST'])
+def process_frame():
+    data = request.get_json()
+    image_data = data['image'].split(',')[1]
+
+    # Decode the base64 image
+    img_bytes = base64.b64decode(image_data)
+
+    # Save the captured frame to a file
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], 'capture.jpg')
+    with open(filepath, 'wb') as f:
+        f.write(img_bytes)
+
+    # Process the image for object counting
+    processed_image, count = process_image(filepath)
+
+    # Encode the processed image to base64
+    _, buffer = cv2.imencode('.jpg', processed_image)
+    processed_image_b64 = base64.b64encode(buffer).decode('utf-8')
+
+    return jsonify({'image': processed_image_b64, 'count': count})
+
 
 def process_image(filepath):
     # Read the image
@@ -60,12 +66,7 @@ def process_image(filepath):
 
     count = len(contours)
 
-    # Save the processed image
-    processed_filename = 'processed_' + os.path.basename(filepath)
-    processed_filepath = os.path.join(app.config['UPLOAD_FOLDER'], processed_filename)
-    cv2.imwrite(processed_filepath, img)
-
-    return processed_filename, count
+    return img, count
 
 if __name__ == '__main__':
     app.run(debug=True)

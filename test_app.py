@@ -2,14 +2,16 @@ import unittest
 import os
 import cv2
 import numpy as np
-from app import app, process_image
+import base64
+import json
+from app import app
 
 class AppTestCase(unittest.TestCase):
 
     def setUp(self):
         self.app = app.test_client()
         self.app.testing = True
-        # Create a dummy image file for testing
+        # Create a dummy image for testing
         self.test_image_path = "test_image.jpg"
         dummy_image = np.zeros((100, 100, 3), dtype=np.uint8)
         cv2.imwrite(self.test_image_path, dummy_image)
@@ -18,29 +20,29 @@ class AppTestCase(unittest.TestCase):
         os.remove(self.test_image_path)
         # Clean up uploaded files
         for f in os.listdir(app.config['UPLOAD_FOLDER']):
-            # Check if the path is a file before attempting to remove it
             if os.path.isfile(os.path.join(app.config['UPLOAD_FOLDER'], f)):
                 os.remove(os.path.join(app.config['UPLOAD_FOLDER'], f))
 
-
-    def test_upload_page(self):
+    def test_index_page(self):
         response = self.app.get('/')
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Object Counter', response.data)
 
-    def test_upload_file(self):
+    def test_process_frame(self):
+        # Read the dummy image and encode it to base64
         with open(self.test_image_path, "rb") as f:
-            response = self.app.post('/', data={'file': f}, content_type='multipart/form-data')
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+
+        response = self.app.post('/process_frame',
+                                 data=json.dumps({'image': 'data:image/jpeg;base64,' + image_data}),
+                                 content_type='application/json')
+
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Processed Image', response.data)
-
-    def test_process_image(self):
-        processed_filename, count = process_image(self.test_image_path)
-        self.assertIsInstance(processed_filename, str)
-        self.assertIsInstance(count, int)
-        # Check that the processed file was created
-        self.assertTrue(os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], processed_filename)))
-
+        data = json.loads(response.data)
+        self.assertIn('image', data)
+        self.assertIn('count', data)
+        self.assertIsInstance(data['image'], str)
+        self.assertIsInstance(data['count'], int)
 
 if __name__ == '__main__':
     unittest.main()

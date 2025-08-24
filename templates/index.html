@@ -13,8 +13,13 @@
             max-width: 800px;
             margin: 0 auto;
         }
-        .upload-form {
-            margin-bottom: 40px;
+        #video-container {
+            margin-bottom: 20px;
+            border: 1px solid black;
+        }
+        #video {
+            width: 100%;
+            height: auto;
         }
         .result {
             margin-top: 40px;
@@ -28,23 +33,60 @@
 <body>
     <div class="container">
         <h1>Object Counter</h1>
-        <div class="upload-form">
-            <form method="post" enctype="multipart/form-data">
-                <input type="file" name="file" accept="image/*" required>
-                <button type="submit">Upload and Count</button>
-            </form>
-            {% if error %}
-                <p style="color: red;">{{ error }}</p>
-            {% endif %}
+        <div id="video-container">
+            <video id="video" autoplay playsinline></video>
         </div>
+        <button id="capture-btn">Capture and Count</button>
 
-        {% if filename %}
-            <div class="result">
-                <h2>Processed Image</h2>
-                <img src="{{ url_for('static', filename='uploads/' + filename) }}" alt="Processed Image">
-                <h3>Object Count: {{ count }}</h3>
-            </div>
-        {% endif %}
+        <div class="result">
+            <h2>Processed Image</h2>
+            <img id="processed-img" src="" alt="Processed Image">
+            <h3 id="object-count"></h3>
+        </div>
     </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const captureBtn = document.getElementById('capture-btn');
+        const processedImg = document.getElementById('processed-img');
+        const objectCount = document.getElementById('object-count');
+
+        // Access the user's camera
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                video.srcObject = stream;
+            })
+            .catch(err => {
+                console.error("Error accessing camera: ", err);
+            });
+
+        captureBtn.addEventListener('click', () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const dataUrl = canvas.toDataURL('image/jpeg');
+
+            // Send the captured frame to the backend
+            fetch('/process_frame', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ image: dataUrl })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Display the processed image and count
+                processedImg.src = 'data:image/jpeg;base64,' + data.image;
+                objectCount.textContent = 'Object Count: ' + data.count;
+            })
+            .catch(err => {
+                console.error("Error processing frame: ", err);
+            });
+        });
+    </script>
 </body>
 </html>
