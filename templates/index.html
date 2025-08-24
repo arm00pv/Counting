@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>Object Counter</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 40px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .upload-form {
+            margin-bottom: 40px;
+        }
+        .result {
+            margin-top: 40px;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Object Counter</h1>
+        <div class="upload-form">
+            <form method="post" enctype="multipart/form-data">
+                <input type="file" name="file" accept="image/*" required>
+                <button type="submit">Upload and Count</button>
+            </form>
+            {% if error %}
+                <p style="color: red;">{{ error }}</p>
+            {% endif %}
+        </div>
+
+        {% if filename %}
+            <div class="result">
+                <h2>Processed Image</h2>
+                <img src="{{ url_for('static', filename='uploads/' + filename) }}" alt="Processed Image">
+                <h3>Object Count: {{ count }}</h3>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>
