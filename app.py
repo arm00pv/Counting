@@ -29,13 +29,14 @@ def process_frame():
     # Decode the base64 image
     img_bytes = base64.b64decode(image_data)
 
-    # Save the captured frame to a file
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], 'capture.jpg')
-    with open(filepath, 'wb') as f:
-        f.write(img_bytes)
+    # Convert the image bytes to a numpy array
+    nparr = np.frombuffer(img_bytes, np.uint8)
+
+    # Decode the image
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
     # Process the image for object counting
-    processed_image, count = process_image(filepath)
+    processed_image, count = process_image(img)
 
     # Encode the processed image to base64
     _, buffer = cv2.imencode('.jpg', processed_image)
@@ -44,9 +45,7 @@ def process_frame():
     return jsonify({'image': processed_image_b64, 'count': count})
 
 
-def process_image(filepath):
-    # Read the image
-    img = cv2.imread(filepath)
+def process_image(img):
 
     # Convert to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)

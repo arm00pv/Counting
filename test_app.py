@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import base64
 import json
-from app import app
+from app import app, process_image
 
 class AppTestCase(unittest.TestCase):
 
@@ -18,10 +18,6 @@ class AppTestCase(unittest.TestCase):
 
     def tearDown(self):
         os.remove(self.test_image_path)
-        # Clean up uploaded files
-        for f in os.listdir(app.config['UPLOAD_FOLDER']):
-            if os.path.isfile(os.path.join(app.config['UPLOAD_FOLDER'], f)):
-                os.remove(os.path.join(app.config['UPLOAD_FOLDER'], f))
 
     def test_index_page(self):
         response = self.app.get('/')
@@ -43,6 +39,14 @@ class AppTestCase(unittest.TestCase):
         self.assertIn('count', data)
         self.assertIsInstance(data['image'], str)
         self.assertIsInstance(data['count'], int)
+
+    def test_process_image(self):
+        # Read the dummy image
+        img = cv2.imread(self.test_image_path)
+        processed_image, count = process_image(img)
+        self.assertIsInstance(processed_image, np.ndarray)
+        self.assertIsInstance(count, int)
+
 
 if __name__ == '__main__':
     unittest.main()
