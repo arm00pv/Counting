@@ -38,58 +38,62 @@ def process_frame():
 
     return jsonify({'image': processed_image_b64, 'count': count})
 
-
 def process_image(main_img, target_img_data=None):
-    # If no target, perform a general count
+    # First, find all potential objects (contours) in the main image.
+    gray = cv2.cvtColor(main_img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = [c for c in contours if 100 < cv2.contourArea(c) < 20000]
+
+    # If no target is provided, this is a "Count All" request.
     if target_img_data is None:
-        gray = cv2.cvtColor(main_img, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = [c for c in contours if cv2.contourArea(c) > 100]
         for contour in contours:
             (x, y, w, h) = cv2.boundingRect(contour)
             cv2.rectangle(main_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
         return main_img, len(contours)
 
-    # --- If a target is provided, perform matching ---
+    # --- If a target is provided, filter contours by color ---
 
-    # Decode the target image
+    # Decode the target image and find its average color
     target_bytes = base64.b64decode(target_img_data)
     target_nparr = np.frombuffer(target_bytes, np.uint8)
     target_img = cv2.imdecode(target_nparr, cv2.IMREAD_COLOR)
+    if target_img is None: return main_img, 0
 
-    # Pre-process images for more robust matching
-    main_blur = cv2.GaussianBlur(main_img, (5, 5), 0)
-    target_blur = cv2.GaussianBlur(target_img, (5, 5), 0)
-    main_hsv = cv2.cvtColor(main_blur, cv2.COLOR_BGR2HSV)
-    target_hsv = cv2.cvtColor(target_blur, cv2.COLOR_BGR2HSV)
+    target_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
+    # Calculate the average color of the non-black pixels in the target
+    # This is more robust if the cropped target has black padding
+    mask = cv2.inRange(target_hsv, (0, 1, 1), (180, 255, 255))
+    target_avg_color = cv2.mean(target_hsv, mask=mask)[:3]
 
-    # Calculate histogram of the target, using fewer bins for robustness
-    # BINS_PER_CHANNEL = 16
-    target_hist = cv2.calcHist([target_hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
-    cv2.normalize(target_hist, target_hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    main_hsv = cv2.cvtColor(main_img, cv2.COLOR_BGR2HSV)
+    matched_contours = []
 
-    # Find contours in the main image
-    gray = cv2.cvtColor(main_blur, cv2.COLOR_BGR2GRAY)
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = [c for c in contours if cv2.contourArea(c) > 100]
-
-    match_count = 0
     for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        roi = main_hsv[y:y+h, x:x+w]
+        # Create a mask for the current contour and find its average color
+        mask = np.zeros(gray.shape, dtype="uint8")
+        cv2.drawContours(mask, [contour], -1, 255, -1)
+        roi_avg_color = cv2.mean(main_hsv, mask=mask)[:3]
 
-        roi_hist = cv2.calcHist([roi], [0, 1], None, [16, 16], [0, 180, 0, 256])
-        cv2.normalize(roi_hist, roi_hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        # Calculate the distance between the target color and the ROI color
+        # We give Hue more weight as it's the most important for color identity
+        hue_diff = min(abs(target_avg_color[0] - roi_avg_color[0]), 180 - abs(target_avg_color[0] - roi_avg_color[0]))
+        sat_diff = abs(target_avg_color[1] - roi_avg_color[1])
 
-        similarity = cv2.compareHist(target_hist, roi_hist, cv2.HISTCMP_CORREL)
+        # This is a simple distance metric. Thresholds can be tuned.
+        # Lower score is a better match.
+        color_distance = (hue_diff * 2) + (sat_diff * 0.1)
 
-        if similarity > 0.7: # Lowered threshold for more lenient matching
-            match_count += 1
-            cv2.rectangle(main_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        if color_distance < 25: # Color distance threshold
+            matched_contours.append(contour)
 
-    return main_img, match_count
+    # Draw boxes on the final matched contours
+    for contour in matched_contours:
+        (x, y, w, h) = cv2.boundingRect(contour)
+        cv2.rectangle(main_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    return main_img, len(matched_contours)
 
 if __name__ == '__main__':
     app.run(debug=True)
