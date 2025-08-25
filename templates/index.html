@@ -13,21 +13,25 @@
             max-width: 800px;
             margin: 0 auto;
         }
-        #video-container {
-            margin-bottom: 20px;
+        #view-container {
+            margin-bottom: 10px;
             border: 1px solid black;
-            position: relative; /* Needed for absolute positioning of child */
+            position: relative; /* Needed for absolute positioning of children */
+            background-color: #eee;
+            /* Aspect ratio box */
+            height: 0;
+            padding-top: 75%; /* 4:3 aspect ratio */
         }
-        #drawing-canvas {
+        #view-container > video, #view-container > canvas {
             position: absolute;
             top: 0;
             left: 0;
-            cursor: crosshair;
-        }
-        #video {
             width: 100%;
-            height: auto;
-            cursor: default;
+            height: 100%;
+            object-fit: contain;
+        }
+        #drawing-canvas {
+            cursor: crosshair;
         }
         .controls {
             margin-bottom: 10px;
@@ -56,25 +60,27 @@
 <body>
     <div class="container">
         <h1>Object Counter</h1>
-        <div id="video-container">
+        <div id="view-container">
             <video id="video" autoplay playsinline></video>
+            <canvas id="snapshot-canvas" style="display: none;"></canvas>
             <canvas id="drawing-canvas" style="display: none;"></canvas>
         </div>
         <div class="controls">
-            <button id="select-target-btn">Select Target</button>
-            <button id="count-matches-btn">Count Matches</button>
-            <button id="count-all-btn">Count All</button>
+            <button id="capture-btn">Capture Image</button>
+            <button id="retake-btn" style="display: none;">Retake</button>
+            <button id="select-target-btn" disabled>Select Target</button>
+            <button id="analyze-btn" disabled>Analyze</button>
             <button id="torch-btn">Toggle Flashlight</button>
         </div>
         <div id="target-info" class="target-info">
             <span>Target:</span>
             <img id="target-preview-img" src="" alt="Target Preview" style="display: none;">
-            <span id="target-status">None selected.</span>
+            <span id="target-status">Capture an image first.</span>
         </div>
 
         <div class="result">
-            <h2>Processed Frame</h2>
-            <img id="processed-img" src="" alt="Processed Image">
+            <h2>Analysis Result</h2>
+            <img id="processed-img" src="" alt="Processed Result" style="display: none;">
             <h3 id="object-count"></h3>
         </div>
     </div>
@@ -82,19 +88,23 @@
     <script>
         // --- DOM Elements ---
         const video = document.getElementById('video');
-        const torchBtn = document.getElementById('torch-btn');
+        const snapshotCanvas = document.getElementById('snapshot-canvas');
+        const drawingCanvas = document.getElementById('drawing-canvas');
+        const captureBtn = document.getElementById('capture-btn');
+        const retakeBtn = document.getElementById('retake-btn');
         const selectTargetBtn = document.getElementById('select-target-btn');
-        const countMatchesBtn = document.getElementById('count-matches-btn');
-        const countAllBtn = document.getElementById('count-all-btn');
+        const analyzeBtn = document.getElementById('analyze-btn');
+        const torchBtn = document.getElementById('torch-btn');
         const targetPreviewImg = document.getElementById('target-preview-img');
         const targetStatus = document.getElementById('target-status');
         const processedImg = document.getElementById('processed-img');
         const objectCount = document.getElementById('object-count');
 
         // --- State Variables ---
-        let torchOn = false;
-        let selectionMode = false;
+        let capturedImageData = null;
         let selectedTargetImgData = null;
+        let drawing = false;
+        let startPos = { x: 0, y: 0 };
 
         // --- Camera Setup ---
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
@@ -107,150 +117,109 @@
             })
             .catch(err => console.error("Error accessing camera: ", err));
 
-        // --- Event Listeners & Drawing Logic ---
-        const drawingCanvas = document.getElementById('drawing-canvas');
-        const ctx = drawingCanvas.getContext('2d');
-        let drawing = false;
-        let startPos = { x: 0, y: 0 };
+        // --- UI Update Functions ---
+        function setLiveMode(isLive) {
+            video.style.display = isLive ? 'block' : 'none';
+            snapshotCanvas.style.display = isLive ? 'none' : 'block';
+            captureBtn.style.display = isLive ? 'inline-block' : 'none';
+            retakeBtn.style.display = isLive ? 'none' : 'inline-block';
+            selectTargetBtn.disabled = isLive;
+            analyzeBtn.disabled = isLive;
+            if (isLive) {
+                targetStatus.textContent = "Capture an image first.";
+                targetPreviewImg.style.display = 'none';
+                processedImg.style.display = 'none';
+                objectCount.textContent = "";
+            }
+        }
 
-        torchBtn.addEventListener('click', () => {
-            const track = video.srcObject.getVideoTracks()[0];
-            torchOn = !torchOn;
-            track.applyConstraints({ advanced: [{torch: torchOn}] }).catch(e => console.error(e));
+        // --- Event Listeners ---
+        captureBtn.addEventListener('click', () => {
+            const sCtx = snapshotCanvas.getContext('2d');
+            snapshotCanvas.width = video.videoWidth;
+            snapshotCanvas.height = video.videoHeight;
+            sCtx.drawImage(video, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
+            capturedImageData = snapshotCanvas.toDataURL('image/jpeg');
+            setLiveMode(false);
+            targetStatus.textContent = "Image captured. Select a target or analyze.";
+        });
+
+        retakeBtn.addEventListener('click', () => {
+            capturedImageData = null;
+            selectedTargetImgData = null;
+            setLiveMode(true);
         });
 
         selectTargetBtn.addEventListener('click', () => {
-            // Prepare canvas for drawing
-            const rect = video.getBoundingClientRect();
-            drawingCanvas.width = rect.width;
-            drawingCanvas.height = rect.height;
+            const dCtx = drawingCanvas.getContext('2d');
+            drawingCanvas.width = snapshotCanvas.width;
+            drawingCanvas.height = snapshotCanvas.height;
             drawingCanvas.style.display = 'block';
             targetStatus.textContent = "Draw a box around the target object.";
         });
 
+        analyzeBtn.addEventListener('click', () => {
+            let payload = { image: capturedImageData };
+            if (selectedTargetImgData) {
+                payload.target_image = selectedTargetImgData.split(',')[1]; // Send only base64 part
+            }
+            processFrame(payload);
+        });
+
+        torchBtn.addEventListener('click', () => {
+            const track = video.srcObject.getVideoTracks()[0];
+            track.applyConstraints({ advanced: [{torch: !track.getSettings().torch}] }).catch(e => console.error(e));
+        });
+
+        // --- Drawing Logic ---
         function getMousePos(canvas, evt) {
             const rect = canvas.getBoundingClientRect();
-            // Handle touch events
-            if (evt.touches) {
-                return {
-                    x: evt.touches[0].clientX - rect.left,
-                    y: evt.touches[0].clientY - rect.top
-                };
-            }
-            return {
-                x: evt.clientX - rect.left,
-                y: evt.clientY - rect.top
-            };
+            const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+            const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+            return { x: clientX - rect.left, y: clientY - rect.top };
         }
-
-        function startDrawing(e) {
-            e.preventDefault();
-            drawing = true;
-            startPos = getMousePos(drawingCanvas, e);
-        }
-
+        function startDrawing(e) { e.preventDefault(); drawing = true; startPos = getMousePos(drawingCanvas, e); }
         function draw(e) {
-            e.preventDefault();
-            if (!drawing) return;
+            e.preventDefault(); if (!drawing) return;
             const currentPos = getMousePos(drawingCanvas, e);
-            ctx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
-            ctx.strokeStyle = "red";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(startPos.x, startPos.y, currentPos.x - startPos.x, currentPos.y - startPos.y);
+            const dCtx = drawingCanvas.getContext('2d');
+            dCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            dCtx.strokeStyle = "red"; dCtx.lineWidth = 2;
+            dCtx.strokeRect(startPos.x, startPos.y, currentPos.x - startPos.x, currentPos.y - startPos.y);
         }
-
         function stopDrawing(e) {
-            e.preventDefault();
-            if (!drawing) return;
-            drawing = false;
+            e.preventDefault(); if (!drawing) return; drawing = false;
             const endPos = getMousePos(drawingCanvas, e);
-
-            // Hide canvas
             drawingCanvas.style.display = 'none';
-            ctx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            drawingCanvas.getContext('2d').clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
 
-            // Get the rectangle dimensions, ensuring width/height are positive
             const rect = {
-                x: Math.min(startPos.x, endPos.x),
-                y: Math.min(startPos.y, endPos.y),
-                w: Math.abs(startPos.x - endPos.x),
-                h: Math.abs(startPos.y - endPos.y)
+                x: Math.min(startPos.x, endPos.x), y: Math.min(startPos.y, endPos.y),
+                w: Math.abs(startPos.x - endPos.x), h: Math.abs(startPos.y - endPos.y)
             };
+            if (rect.w < 10 || rect.h < 10) { targetStatus.textContent = "Selection too small. Try again."; return; }
 
-            if (rect.w < 10 || rect.h < 10) { // Ignore tiny boxes
-                targetStatus.textContent = "Selection too small. Try again.";
-                return;
-            }
-
-            // --- Crop the selection from the video frame ---
-            const videoRect = video.getBoundingClientRect();
-            // Create a canvas to hold the full video frame
-            const frameCanvas = document.createElement('canvas');
-            frameCanvas.width = videoRect.width;
-            frameCanvas.height = videoRect.height;
-            frameCanvas.getContext('2d').drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
-
-            // Create a canvas to hold the cropped image
             const croppedCanvas = document.createElement('canvas');
-            croppedCanvas.width = rect.w;
-            croppedCanvas.height = rect.h;
-            // Crop from the frame canvas to the cropped canvas
-            croppedCanvas.getContext('2d').drawImage(frameCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+            croppedCanvas.width = rect.w; croppedCanvas.height = rect.h;
+            croppedCanvas.getContext('2d').drawImage(snapshotCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
 
-            // Set the cropped image as the target
             selectedTargetImgData = croppedCanvas.toDataURL('image/jpeg');
             targetPreviewImg.src = selectedTargetImgData;
             targetPreviewImg.style.display = 'inline';
-            targetStatus.textContent = "Target selected.";
+            targetStatus.textContent = "Target selected. Ready to analyze.";
         }
-
         drawingCanvas.addEventListener('mousedown', startDrawing);
         drawingCanvas.addEventListener('mousemove', draw);
         drawingCanvas.addEventListener('mouseup', stopDrawing);
-        drawingCanvas.addEventListener('mouseleave', stopDrawing);
+        drawingCanvas.addEventListener('mouseleave', (e) => { if(drawing) stopDrawing(e); });
         drawingCanvas.addEventListener('touchstart', startDrawing);
         drawingCanvas.addEventListener('touchmove', draw);
         drawingCanvas.addEventListener('touchend', stopDrawing);
 
-        countAllBtn.addEventListener('click', () => {
-            processFrame(null);
-        });
-
-        countMatchesBtn.addEventListener('click', () => {
-            if (!selectedTargetImgData) {
-                alert("Please select a target object first!");
-                return;
-            }
-            processFrame(selectedTargetImgData);
-        });
-
         // --- Backend Communication ---
-        function getFrameDataUrl() {
-            const MAX_WIDTH = 640;
-            const MAX_HEIGHT = 480;
-            let width = video.videoWidth;
-            let height = video.videoHeight;
-
-            if (width > height) {
-                if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-            } else {
-                if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
-            }
-
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-            return canvas.toDataURL('image/jpeg');
-        }
-
-        function processFrame(targetImgData) {
-            const frameData = getFrameDataUrl();
-            let payload = { image: frameData };
-            if (targetImgData) {
-                payload.target_image = targetImgData;
-            }
-
+        function processFrame(payload) {
+            targetStatus.textContent = "Analyzing...";
+            objectCount.textContent = "";
             fetch('/process_frame', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -259,10 +228,13 @@
             .then(response => response.json())
             .then(data => {
                 processedImg.src = 'data:image/jpeg;base64,' + data.image;
+                processedImg.style.display = 'block';
                 objectCount.textContent = 'Object Count: ' + data.count;
+                targetStatus.textContent = "Analysis complete.";
             })
             .catch(err => {
                 console.error("Error processing frame: ", err);
+                targetStatus.textContent = "Analysis failed.";
             });
         }
     </script>
