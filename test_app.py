@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 import os
 import cv2
 import numpy as np
@@ -13,13 +14,13 @@ class AppTestCase(unittest.TestCase):
         self.app.testing = True
         # Create a test image: black bg, two red squares, one blue square
         self.test_image_path = "test_image.png"
-        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        self.img = np.zeros((200, 200, 3), dtype=np.uint8)
         # Red squares
-        cv2.rectangle(img, (20, 20), (60, 60), (0, 0, 255), -1)
-        cv2.rectangle(img, (20, 120), (60, 160), (0, 0, 255), -1)
+        cv2.rectangle(self.img, (20, 20), (60, 60), (0, 0, 255), -1)
+        cv2.rectangle(self.img, (20, 120), (60, 160), (0, 0, 255), -1)
         # Blue square
-        cv2.rectangle(img, (120, 20), (160, 60), (255, 0, 0), -1)
-        cv2.imwrite(self.test_image_path, img)
+        cv2.rectangle(self.img, (120, 20), (160, 60), (255, 0, 0), -1)
+        cv2.imwrite(self.test_image_path, self.img)
 
     def tearDown(self):
         if os.path.exists(self.test_image_path):
@@ -38,31 +39,45 @@ class AppTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
-        self.assertEqual(data['count'], 3) # Should find all 3 squares
+        self.assertEqual(data['count'], 3)
 
-    def test_process_frame_count_matches(self):
-        # 1. Simulate the frontend's cropping logic to create a target image.
-        # We'll crop the first red square from the test image.
-        full_img = cv2.imread(self.test_image_path)
-        target_crop = full_img[20:60, 20:60] # Coords of the first red square
+    @patch('app.feature_extractor.extract_features')
+    def test_process_frame_count_matches_mocked(self, mock_extract_features):
+        # Define the mock return values
+        # A, B, C are arbitrary feature vectors. A and B are identical.
+        vec_A = np.array([1.0, 0.0, 0.0])
+        vec_B = np.array([1.0, 0.0, 0.0])
+        vec_C = np.array([0.0, 1.0, 0.0])
+
+        # The first call is for the target (a red square).
+        # The next three calls are for the ROIs found in the main image.
+        mock_extract_features.side_effect = [vec_A, vec_A, vec_B, vec_C]
+
+        # 1. Create the target image data (a crop of the first red square)
+        target_crop = self.img[20:60, 20:60]
         _, buffer = cv2.imencode('.png', target_crop)
         red_square_target_b64 = base64.b64encode(buffer).decode('utf-8')
 
-        # 2. Now, process the full frame using the cropped target
+        # 2. Create the main image data
         with open(self.test_image_path, "rb") as f:
             image_data_b64 = base64.b64encode(f.read()).decode('utf-8')
 
+        # 3. Send the payload to the backend
         process_payload = {
             'image': 'data:image/png;base64,' + image_data_b64,
-            'target_image': red_square_target_b64
+            'target_image': red_square_target_b64,
+            'threshold': 0.95 # Use a high threshold, since our mock vectors are perfect
         }
         response = self.app.post('/process_frame', data=json.dumps(process_payload), content_type='application/json')
 
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
         self.assertIn('count', data)
-        # This is the crucial test: it should find the two red squares
+        # The mock should result in the two "red" vectors (A and B) matching.
         self.assertEqual(data['count'], 2)
+        # Verify that extract_features was called 4 times (1 for target, 3 for ROIs)
+        self.assertEqual(mock_extract_features.call_count, 4)
+
 
 if __name__ == '__main__':
     unittest.main()

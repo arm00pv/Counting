@@ -6,16 +6,59 @@ from werkzeug.utils import secure_filename
 import os
 import base64
 
+import torch
+import torchvision.models as models
+import torchvision.transforms as transforms
+from PIL import Image
+import torch.nn as nn
+
+# --- Feature Extractor Class ---
+class FeatureExtractor:
+    def __init__(self):
+        # Use a pre-trained ResNet-18 model
+        # Using weights instead of pretrained=True for newer torchvision versions
+        self.model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        # Remove the final classification layer
+        self.model = nn.Sequential(*list(self.model.children())[:-1])
+        # Set to evaluation mode
+        self.model.eval()
+
+        # Define the image transformations
+        self.transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+    def extract_features(self, img):
+        # Convert OpenCV image (BGR) to PIL image (RGB)
+        try:
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(img_rgb)
+        except cv2.error:
+            return None # Handle cases where the image is invalid
+
+        # Apply transformations and get the feature vector
+        img_t = self.transform(pil_img)
+        batch_t = torch.unsqueeze(img_t, 0)
+
+        with torch.no_grad():
+            features = self.model(batch_t)
+
+        # Flatten the features to a 1D vector and convert to numpy
+        return features.squeeze().numpy()
+
+# Instantiate the feature extractor once when the app starts
+feature_extractor = FeatureExtractor()
+
+# --- Flask App ---
 app = Flask(__name__)
 
 # Configure upload folder and allowed extensions
 UPLOAD_FOLDER = 'static/uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 @app.route('/')
 def index():
@@ -26,7 +69,6 @@ def process_frame():
     data = request.get_json()
     image_data = data['image'].split(',')[1]
     target_image_data = data.get('target_image')
-    # Get the threshold from the payload, default to 0.8 if not provided
     threshold = data.get('threshold', 0.8)
 
     img_bytes = base64.b64decode(image_data)
@@ -40,6 +82,9 @@ def process_frame():
 
     return jsonify({'image': processed_image_b64, 'count': count})
 
+def cosine_similarity(v1, v2):
+    return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+
 def process_image(main_img, target_img_data=None, threshold=0.8):
     # If no target, perform a general count
     if target_img_data is None:
@@ -52,19 +97,18 @@ def process_image(main_img, target_img_data=None, threshold=0.8):
             cv2.rectangle(main_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
         return main_img, len(contours)
 
-    # --- If a target is provided, perform Color Histogram Matching ---
+    # --- If a target is provided, perform Deep Learning Feature Matching ---
 
+    # Decode the target image and extract its features
     target_bytes = base64.b64decode(target_img_data)
     target_nparr = np.frombuffer(target_bytes, np.uint8)
     target_img = cv2.imdecode(target_nparr, cv2.IMREAD_COLOR)
     if target_img is None: return main_img, 0
 
-    target_hsv = cv2.cvtColor(target_img, cv2.COLOR_BGR2HSV)
-    target_mask = cv2.inRange(target_hsv, (0, 1, 1), (180, 255, 255))
-    target_hist = cv2.calcHist([target_hsv], [0, 1], target_mask, [32, 32], [0, 180, 0, 256])
-    cv2.normalize(target_hist, target_hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    target_features = feature_extractor.extract_features(target_img)
+    if target_features is None: return main_img, 0
 
-    main_hsv = cv2.cvtColor(main_img, cv2.COLOR_BGR2HSV)
+    # Find all contours in the main image
     gray = cv2.cvtColor(main_img, cv2.COLOR_BGR2GRAY)
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -72,17 +116,19 @@ def process_image(main_img, target_img_data=None, threshold=0.8):
 
     match_count = 0
     for contour in contours:
-        mask = np.zeros(gray.shape, dtype="uint8")
-        cv2.drawContours(mask, [contour], -1, 255, -1)
+        x, y, w, h = cv2.boundingRect(contour)
+        # Crop the region of interest (ROI) from the main image
+        roi = main_img[y:y+h, x:x+w]
 
-        roi_hist = cv2.calcHist([main_hsv], [0, 1], mask, [32, 32], [0, 180, 0, 256])
-        cv2.normalize(roi_hist, roi_hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+        # Extract features from the ROI
+        roi_features = feature_extractor.extract_features(roi)
+        if roi_features is None: continue
 
-        color_similarity = cv2.compareHist(target_hist, roi_hist, cv2.HISTCMP_CORREL)
+        # Compare feature vectors using cosine similarity
+        similarity = cosine_similarity(target_features, roi_features)
 
-        if color_similarity > threshold:
+        if similarity > threshold:
             match_count += 1
-            (x, y, w, h) = cv2.boundingRect(contour)
             cv2.rectangle(main_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
     return main_img, match_count
