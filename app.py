@@ -64,8 +64,9 @@ def process_image(main_img, target_img_data=None):
     main_hsv = cv2.cvtColor(main_blur, cv2.COLOR_BGR2HSV)
     target_hsv = cv2.cvtColor(target_blur, cv2.COLOR_BGR2HSV)
 
-    # Calculate histogram of the target
-    target_hist = cv2.calcHist([target_hsv], [0, 1], None, [180, 256], [0, 180, 0, 256])
+    # Calculate histogram of the target, using fewer bins for robustness
+    # BINS_PER_CHANNEL = 16
+    target_hist = cv2.calcHist([target_hsv], [0, 1], None, [16, 16], [0, 180, 0, 256])
     cv2.normalize(target_hist, target_hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
 
     # Find contours in the main image
@@ -79,7 +80,7 @@ def process_image(main_img, target_img_data=None):
         x, y, w, h = cv2.boundingRect(contour)
         roi = main_hsv[y:y+h, x:x+w]
 
-        roi_hist = cv2.calcHist([roi], [0, 1], None, [180, 256], [0, 180, 0, 256])
+        roi_hist = cv2.calcHist([roi], [0, 1], None, [16, 16], [0, 180, 0, 256])
         cv2.normalize(roi_hist, roi_hist, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
 
         similarity = cv2.compareHist(target_hist, roi_hist, cv2.HISTCMP_CORREL)
