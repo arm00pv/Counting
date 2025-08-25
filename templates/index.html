@@ -152,8 +152,9 @@
 
         selectTargetBtn.addEventListener('click', () => {
             const dCtx = drawingCanvas.getContext('2d');
-            drawingCanvas.width = snapshotCanvas.width;
-            drawingCanvas.height = snapshotCanvas.height;
+            const rect = snapshotCanvas.getBoundingClientRect();
+            drawingCanvas.width = rect.width;
+            drawingCanvas.height = rect.height;
             drawingCanvas.style.display = 'block';
             targetStatus.textContent = "Draw a box around the target object.";
         });
@@ -161,7 +162,10 @@
         analyzeBtn.addEventListener('click', () => {
             let payload = { image: capturedImageData };
             if (selectedTargetImgData) {
-                payload.target_image = selectedTargetImgData.split(',')[1]; // Send only base64 part
+                payload.target_image = selectedTargetImgData.split(',')[1];
+            } else {
+                // If user wants to count all, no target is needed.
+                // Backend handles this by checking if target_image is None.
             }
             processFrame(payload);
         });
@@ -172,24 +176,61 @@
         });
 
         // --- Drawing Logic ---
-        function getMousePos(canvas, evt) {
-            const rect = canvas.getBoundingClientRect();
+        function getCorrectedPos(canvas, evt) {
+            const canvasRect = canvas.getBoundingClientRect();
             const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
             const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
-            return { x: clientX - rect.left, y: clientY - rect.top };
+
+            // Calculate the scale factor of the displayed image vs its natural size
+            const scaleX = canvasRect.width / canvas.width;
+            const scaleY = canvasRect.height / canvas.height;
+            const scale = Math.min(scaleX, scaleY); // 'contain' scaling
+
+            // Calculate the padding (letterboxing)
+            const renderedW = canvas.width * scale;
+            const renderedH = canvas.height * scale;
+            const offsetX = (canvasRect.width - renderedW) / 2;
+            const offsetY = (canvasRect.height - renderedH) / 2;
+
+            // Adjust mouse coordinates for padding and scale
+            const correctedX = (clientX - canvasRect.left - offsetX) / scale;
+            const correctedY = (clientY - canvasRect.top - offsetY) / scale;
+
+            return { x: correctedX, y: correctedY };
         }
-        function startDrawing(e) { e.preventDefault(); drawing = true; startPos = getMousePos(drawingCanvas, e); }
+
+        function startDrawing(e) {
+            e.preventDefault();
+            drawing = true;
+            startPos = getCorrectedPos(drawingCanvas, e);
+        }
+
         function draw(e) {
             e.preventDefault(); if (!drawing) return;
-            const currentPos = getMousePos(drawingCanvas, e);
+            const currentPos = getCorrectedPos(drawingCanvas, e);
             const dCtx = drawingCanvas.getContext('2d');
             dCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
             dCtx.strokeStyle = "red"; dCtx.lineWidth = 2;
-            dCtx.strokeRect(startPos.x, startPos.y, currentPos.x - startPos.x, currentPos.y - startPos.y);
+
+            // We need to draw on the scaled canvas, so we must re-scale our corrected coords
+            const canvasRect = drawingCanvas.getBoundingClientRect();
+            const scaleX = canvasRect.width / snapshotCanvas.width;
+            const scaleY = canvasRect.height / snapshotCanvas.height;
+            const scale = Math.min(scaleX, scaleY);
+            const offsetX = (canvasRect.width - (snapshotCanvas.width * scale)) / 2;
+            const offsetY = (canvasRect.height - (snapshotCanvas.height * scale)) / 2;
+
+            const drawX = (startPos.x * scale) + offsetX;
+            const drawY = (startPos.y * scale) + offsetY;
+            const drawW = (currentPos.x - startPos.x) * scale;
+            const drawH = (currentPos.y - startPos.y) * scale;
+            dCtx.strokeRect(drawX, drawY, drawW, drawH);
         }
+
         function stopDrawing(e) {
             e.preventDefault(); if (!drawing) return; drawing = false;
-            const endPos = getMousePos(drawingCanvas, e);
+            const endPos = getCorrectedPos(drawingCanvas, e);
+
             drawingCanvas.style.display = 'none';
             drawingCanvas.getContext('2d').clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
 
@@ -201,6 +242,7 @@
 
             const croppedCanvas = document.createElement('canvas');
             croppedCanvas.width = rect.w; croppedCanvas.height = rect.h;
+            // Crop from the original, unscaled snapshot canvas
             croppedCanvas.getContext('2d').drawImage(snapshotCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
 
             selectedTargetImgData = croppedCanvas.toDataURL('image/jpeg');
