@@ -37,6 +37,7 @@
             <video id="video" autoplay playsinline></video>
         </div>
         <button id="capture-btn">Capture and Count</button>
+        <button id="torch-btn">Toggle Flashlight</button>
 
         <div class="result">
             <h2>Processed Image</h2>
@@ -48,17 +49,33 @@
     <script>
         const video = document.getElementById('video');
         const captureBtn = document.getElementById('capture-btn');
+        const torchBtn = document.getElementById('torch-btn');
         const processedImg = document.getElementById('processed-img');
         const objectCount = document.getElementById('object-count');
+        let torchOn = false;
 
         // Access the user's camera
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
             .then(stream => {
                 video.srcObject = stream;
+                // Check if torch is supported
+                const track = stream.getVideoTracks()[0];
+                const capabilities = track.getCapabilities();
+                if (!capabilities.torch) {
+                    torchBtn.disabled = true;
+                }
             })
             .catch(err => {
                 console.error("Error accessing camera: ", err);
             });
+
+        torchBtn.addEventListener('click', () => {
+            const track = video.srcObject.getVideoTracks()[0];
+            torchOn = !torchOn;
+            track.applyConstraints({
+                advanced: [{torch: torchOn}]
+            }).catch(e => console.error(e));
+        });
 
         captureBtn.addEventListener('click', () => {
             const MAX_WIDTH = 640;
