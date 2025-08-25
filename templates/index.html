@@ -16,6 +16,13 @@
         #video-container {
             margin-bottom: 20px;
             border: 1px solid black;
+            position: relative; /* Needed for absolute positioning of child */
+        }
+        #drawing-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: crosshair;
         }
         #video {
             width: 100%;
@@ -51,6 +58,7 @@
         <h1>Object Counter</h1>
         <div id="video-container">
             <video id="video" autoplay playsinline></video>
+            <canvas id="drawing-canvas" style="display: none;"></canvas>
         </div>
         <div class="controls">
             <button id="select-target-btn">Select Target</button>
@@ -99,7 +107,12 @@
             })
             .catch(err => console.error("Error accessing camera: ", err));
 
-        // --- Event Listeners ---
+        // --- Event Listeners & Drawing Logic ---
+        const drawingCanvas = document.getElementById('drawing-canvas');
+        const ctx = drawingCanvas.getContext('2d');
+        let drawing = false;
+        let startPos = { x: 0, y: 0 };
+
         torchBtn.addEventListener('click', () => {
             const track = video.srcObject.getVideoTracks()[0];
             torchOn = !torchOn;
@@ -107,10 +120,97 @@
         });
 
         selectTargetBtn.addEventListener('click', () => {
-            selectionMode = true;
-            targetStatus.textContent = "Active: Tap an object in the video.";
-            video.style.cursor = "crosshair";
+            // Prepare canvas for drawing
+            const rect = video.getBoundingClientRect();
+            drawingCanvas.width = rect.width;
+            drawingCanvas.height = rect.height;
+            drawingCanvas.style.display = 'block';
+            targetStatus.textContent = "Draw a box around the target object.";
         });
+
+        function getMousePos(canvas, evt) {
+            const rect = canvas.getBoundingClientRect();
+            // Handle touch events
+            if (evt.touches) {
+                return {
+                    x: evt.touches[0].clientX - rect.left,
+                    y: evt.touches[0].clientY - rect.top
+                };
+            }
+            return {
+                x: evt.clientX - rect.left,
+                y: evt.clientY - rect.top
+            };
+        }
+
+        function startDrawing(e) {
+            e.preventDefault();
+            drawing = true;
+            startPos = getMousePos(drawingCanvas, e);
+        }
+
+        function draw(e) {
+            e.preventDefault();
+            if (!drawing) return;
+            const currentPos = getMousePos(drawingCanvas, e);
+            ctx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            ctx.strokeStyle = "red";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(startPos.x, startPos.y, currentPos.x - startPos.x, currentPos.y - startPos.y);
+        }
+
+        function stopDrawing(e) {
+            e.preventDefault();
+            if (!drawing) return;
+            drawing = false;
+            const endPos = getMousePos(drawingCanvas, e);
+
+            // Hide canvas
+            drawingCanvas.style.display = 'none';
+            ctx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+
+            // Get the rectangle dimensions, ensuring width/height are positive
+            const rect = {
+                x: Math.min(startPos.x, endPos.x),
+                y: Math.min(startPos.y, endPos.y),
+                w: Math.abs(startPos.x - endPos.x),
+                h: Math.abs(startPos.y - endPos.y)
+            };
+
+            if (rect.w < 10 || rect.h < 10) { // Ignore tiny boxes
+                targetStatus.textContent = "Selection too small. Try again.";
+                return;
+            }
+
+            // --- Crop the selection from the video frame ---
+            const videoRect = video.getBoundingClientRect();
+            // Create a canvas to hold the full video frame
+            const frameCanvas = document.createElement('canvas');
+            frameCanvas.width = videoRect.width;
+            frameCanvas.height = videoRect.height;
+            frameCanvas.getContext('2d').drawImage(video, 0, 0, frameCanvas.width, frameCanvas.height);
+
+            // Create a canvas to hold the cropped image
+            const croppedCanvas = document.createElement('canvas');
+            croppedCanvas.width = rect.w;
+            croppedCanvas.height = rect.h;
+            // Crop from the frame canvas to the cropped canvas
+            croppedCanvas.getContext('2d').drawImage(frameCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+
+            // Set the cropped image as the target
+            selectedTargetImgData = croppedCanvas.toDataURL('image/jpeg');
+            targetPreviewImg.src = selectedTargetImgData;
+            targetPreviewImg.style.display = 'inline';
+            targetStatus.textContent = "Target selected.";
+        }
+
+        drawingCanvas.addEventListener('mousedown', startDrawing);
+        drawingCanvas.addEventListener('mousemove', draw);
+        drawingCanvas.addEventListener('mouseup', stopDrawing);
+        drawingCanvas.addEventListener('mouseleave', stopDrawing);
+        drawingCanvas.addEventListener('touchstart', startDrawing);
+        drawingCanvas.addEventListener('touchmove', draw);
+        drawingCanvas.addEventListener('touchend', stopDrawing);
 
         countAllBtn.addEventListener('click', () => {
             processFrame(null);
@@ -122,20 +222,6 @@
                 return;
             }
             processFrame(selectedTargetImgData);
-        });
-
-        video.addEventListener('click', (event) => {
-            if (!selectionMode) return;
-
-            const rect = video.getBoundingClientRect();
-            const x = (event.clientX - rect.left) / rect.width;
-            const y = (event.clientY - rect.top) / rect.height;
-
-            getTargetImage(x, y);
-
-            selectionMode = false;
-            targetStatus.textContent = "Acquiring target...";
-            video.style.cursor = "default";
         });
 
         // --- Backend Communication ---
@@ -156,32 +242,6 @@
             canvas.height = height;
             canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
             return canvas.toDataURL('image/jpeg');
-        }
-
-        function getTargetImage(x, y) {
-            const frameData = getFrameDataUrl();
-            fetch('/get_target_at_coords', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: frameData, x: x, y: y })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.target_image) {
-                    selectedTargetImgData = data.target_image;
-                    targetPreviewImg.src = 'data:image/jpeg;base64,' + selectedTargetImgData;
-                    targetPreviewImg.style.display = 'inline';
-                    targetStatus.textContent = "Target selected.";
-                } else {
-                    selectedTargetImgData = null;
-                    targetPreviewImg.style.display = 'none';
-                    targetStatus.textContent = "No object found at selection. Try again.";
-                }
-            })
-            .catch(err => {
-                console.error("Error getting target: ", err);
-                targetStatus.textContent = "Error selecting target.";
-            });
         }
 
         function processFrame(targetImgData) {

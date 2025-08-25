@@ -21,40 +21,6 @@ def allowed_file(filename):
 def index():
     return render_template('index.html')
 
-@app.route('/get_target_at_coords', methods=['POST'])
-def get_target_at_coords():
-    data = request.get_json()
-    image_data = data['image'].split(',')[1]
-    x = data.get('x')
-    y = data.get('y')
-
-    img_bytes = base64.b64decode(image_data)
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = [c for c in contours if cv2.contourArea(c) > 100]
-
-    abs_x = int(x * img.shape[1])
-    abs_y = int(y * img.shape[0])
-
-    target_contour = None
-    for contour in contours:
-        if cv2.pointPolygonTest(contour, (abs_x, abs_y), False) >= 0:
-            target_contour = contour
-            break
-
-    if target_contour is not None:
-        x, y, w, h = cv2.boundingRect(target_contour)
-        cropped_target = img[y:y+h, x:x+w]
-        _, buffer = cv2.imencode('.jpg', cropped_target)
-        target_image_b64 = base64.b64encode(buffer).decode('utf-8')
-        return jsonify({'target_image': target_image_b64})
-    else:
-        return jsonify({'target_image': None})
-
 @app.route('/process_frame', methods=['POST'])
 def process_frame():
     data = request.get_json()

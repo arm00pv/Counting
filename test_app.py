@@ -29,18 +29,6 @@ class AppTestCase(unittest.TestCase):
         response = self.app.get('/')
         self.assertEqual(response.status_code, 200)
 
-    def test_get_target_at_coords(self):
-        with open(self.test_image_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode('utf-8')
-
-        # Coords for the first red square
-        payload = {'image': 'data:image/png;base64,' + image_data, 'x': 0.2, 'y': 0.2}
-        response = self.app.post('/get_target_at_coords', data=json.dumps(payload), content_type='application/json')
-        self.assertEqual(response.status_code, 200)
-        data = json.loads(response.data)
-        self.assertIn('target_image', data)
-        self.assertIsNotNone(data['target_image'])
-
     def test_process_frame_count_all(self):
         with open(self.test_image_path, "rb") as f:
             image_data = base64.b64encode(f.read()).decode('utf-8')
@@ -53,17 +41,17 @@ class AppTestCase(unittest.TestCase):
         self.assertEqual(data['count'], 3) # Should find all 3 squares
 
     def test_process_frame_count_matches(self):
-        # 1. Get the target image data first (the first red square)
+        # 1. Simulate the frontend's cropping logic to create a target image.
+        # We'll crop the first red square from the test image.
+        full_img = cv2.imread(self.test_image_path)
+        target_crop = full_img[20:60, 20:60] # Coords of the first red square
+        _, buffer = cv2.imencode('.png', target_crop)
+        red_square_target_b64 = base64.b64encode(buffer).decode('utf-8')
+
+        # 2. Now, process the full frame using the cropped target
         with open(self.test_image_path, "rb") as f:
             image_data_b64 = base64.b64encode(f.read()).decode('utf-8')
 
-        get_target_payload = {'image': 'data:image/png;base64,' + image_data_b64, 'x': 0.2, 'y': 0.2}
-        response = self.app.post('/get_target_at_coords', data=json.dumps(get_target_payload), content_type='application/json')
-        target_data = json.loads(response.data)
-        red_square_target_b64 = target_data['target_image']
-        self.assertIsNotNone(red_square_target_b64)
-
-        # 2. Now, process the full frame using the obtained target
         process_payload = {
             'image': 'data:image/png;base64,' + image_data_b64,
             'target_image': red_square_target_b64
