@@ -84,7 +84,7 @@ def process_image(main_img, target_img_data=None):
         # Compare histograms
         color_similarity = cv2.compareHist(target_hist, roi_hist, cv2.HISTCMP_CORREL)
 
-        if color_similarity > 0.8:
+        if color_similarity > 0.5: # Lowered threshold for more lenient real-world matching
             match_count += 1
             (x, y, w, h) = cv2.boundingRect(contour)
             cv2.rectangle(main_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
