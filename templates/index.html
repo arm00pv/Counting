@@ -20,6 +20,22 @@
         #video {
             width: 100%;
             height: auto;
+            cursor: default;
+        }
+        .controls {
+            margin-bottom: 10px;
+        }
+        .target-info {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            min-height: 50px;
+        }
+        #target-preview-img {
+            border: 1px solid #ccc;
+            margin-left: 10px;
+            margin-right: 10px;
+            max-height: 50px;
         }
         .result {
             margin-top: 40px;
@@ -36,106 +52,152 @@
         <div id="video-container">
             <video id="video" autoplay playsinline></video>
         </div>
-        <button id="capture-btn">Capture and Count</button>
-        <button id="torch-btn">Toggle Flashlight</button>
-        <button id="select-btn">Select Object</button>
-        <span id="selection-status" style="margin-left: 10px;"></span>
+        <div class="controls">
+            <button id="select-target-btn">Select Target</button>
+            <button id="count-matches-btn">Count Matches</button>
+            <button id="count-all-btn">Count All</button>
+            <button id="torch-btn">Toggle Flashlight</button>
+        </div>
+        <div id="target-info" class="target-info">
+            <span>Target:</span>
+            <img id="target-preview-img" src="" alt="Target Preview" style="display: none;">
+            <span id="target-status">None selected.</span>
+        </div>
 
         <div class="result">
-            <h2>Processed Image</h2>
+            <h2>Processed Frame</h2>
             <img id="processed-img" src="" alt="Processed Image">
             <h3 id="object-count"></h3>
         </div>
     </div>
 
     <script>
+        // --- DOM Elements ---
         const video = document.getElementById('video');
-        const captureBtn = document.getElementById('capture-btn');
         const torchBtn = document.getElementById('torch-btn');
-        const selectBtn = document.getElementById('select-btn');
-        const selectionStatus = document.getElementById('selection-status');
+        const selectTargetBtn = document.getElementById('select-target-btn');
+        const countMatchesBtn = document.getElementById('count-matches-btn');
+        const countAllBtn = document.getElementById('count-all-btn');
+        const targetPreviewImg = document.getElementById('target-preview-img');
+        const targetStatus = document.getElementById('target-status');
         const processedImg = document.getElementById('processed-img');
         const objectCount = document.getElementById('object-count');
+
+        // --- State Variables ---
         let torchOn = false;
         let selectionMode = false;
+        let selectedTargetImgData = null;
 
-        // Access the user's camera
+        // --- Camera Setup ---
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
             .then(stream => {
                 video.srcObject = stream;
-                // Check if torch is supported
                 const track = stream.getVideoTracks()[0];
-                const capabilities = track.getCapabilities();
-                if (!capabilities.torch) {
+                if (!track.getCapabilities().torch) {
                     torchBtn.disabled = true;
                 }
             })
-            .catch(err => {
-                console.error("Error accessing camera: ", err);
-            });
+            .catch(err => console.error("Error accessing camera: ", err));
 
+        // --- Event Listeners ---
         torchBtn.addEventListener('click', () => {
             const track = video.srcObject.getVideoTracks()[0];
             torchOn = !torchOn;
-            track.applyConstraints({
-                advanced: [{torch: torchOn}]
-            }).catch(e => console.error(e));
+            track.applyConstraints({ advanced: [{torch: torchOn}] }).catch(e => console.error(e));
         });
 
-        selectBtn.addEventListener('click', () => {
-            selectionMode = !selectionMode;
-            if (selectionMode) {
-                selectionStatus.textContent = "Selection mode active: Tap on an object.";
-                video.style.cursor = "crosshair";
-            } else {
-                selectionStatus.textContent = "";
-                video.style.cursor = "default";
+        selectTargetBtn.addEventListener('click', () => {
+            selectionMode = true;
+            targetStatus.textContent = "Active: Tap an object in the video.";
+            video.style.cursor = "crosshair";
+        });
+
+        countAllBtn.addEventListener('click', () => {
+            processFrame(null);
+        });
+
+        countMatchesBtn.addEventListener('click', () => {
+            if (!selectedTargetImgData) {
+                alert("Please select a target object first!");
+                return;
             }
+            processFrame(selectedTargetImgData);
         });
 
-        function processFrame(selectionX = null, selectionY = null) {
+        video.addEventListener('click', (event) => {
+            if (!selectionMode) return;
+
+            const rect = video.getBoundingClientRect();
+            const x = (event.clientX - rect.left) / rect.width;
+            const y = (event.clientY - rect.top) / rect.height;
+
+            getTargetImage(x, y);
+
+            selectionMode = false;
+            targetStatus.textContent = "Acquiring target...";
+            video.style.cursor = "default";
+        });
+
+        // --- Backend Communication ---
+        function getFrameDataUrl() {
             const MAX_WIDTH = 640;
             const MAX_HEIGHT = 480;
             let width = video.videoWidth;
             let height = video.videoHeight;
 
             if (width > height) {
-                if (width > MAX_WIDTH) {
-                    height *= MAX_WIDTH / width;
-                    width = MAX_WIDTH;
-                }
+                if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
             } else {
-                if (height > MAX_HEIGHT) {
-                    width *= MAX_HEIGHT / height;
-                    height = MAX_HEIGHT;
-                }
+                if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
             }
 
             const canvas = document.createElement('canvas');
             canvas.width = width;
             canvas.height = height;
-            const context = canvas.getContext('2d');
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL('image/jpeg');
+        }
 
-            const dataUrl = canvas.toDataURL('image/jpeg');
+        function getTargetImage(x, y) {
+            const frameData = getFrameDataUrl();
+            fetch('/get_target_at_coords', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: frameData, x: x, y: y })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.target_image) {
+                    selectedTargetImgData = data.target_image;
+                    targetPreviewImg.src = 'data:image/jpeg;base64,' + selectedTargetImgData;
+                    targetPreviewImg.style.display = 'inline';
+                    targetStatus.textContent = "Target selected.";
+                } else {
+                    selectedTargetImgData = null;
+                    targetPreviewImg.style.display = 'none';
+                    targetStatus.textContent = "No object found at selection. Try again.";
+                }
+            })
+            .catch(err => {
+                console.error("Error getting target: ", err);
+                targetStatus.textContent = "Error selecting target.";
+            });
+        }
 
-            let payload = { image: dataUrl };
-            if (selectionX !== null && selectionY !== null) {
-                payload.x = selectionX;
-                payload.y = selectionY;
+        function processFrame(targetImgData) {
+            const frameData = getFrameDataUrl();
+            let payload = { image: frameData };
+            if (targetImgData) {
+                payload.target_image = targetImgData;
             }
 
-            // Send the captured frame to the backend
             fetch('/process_frame', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             })
             .then(response => response.json())
             .then(data => {
-                // Display the processed image and count
                 processedImg.src = 'data:image/jpeg;base64,' + data.image;
                 objectCount.textContent = 'Object Count: ' + data.count;
             })
@@ -143,28 +205,6 @@
                 console.error("Error processing frame: ", err);
             });
         }
-
-        captureBtn.addEventListener('click', () => {
-            processFrame();
-        });
-
-        video.addEventListener('click', (event) => {
-            if (!selectionMode) {
-                return;
-            }
-
-            // Calculate click coordinates as a percentage of the video dimensions
-            const rect = video.getBoundingClientRect();
-            const x = (event.clientX - rect.left) / rect.width;
-            const y = (event.clientY - rect.top) / rect.height;
-
-            processFrame(x, y);
-
-            // Exit selection mode
-            selectionMode = false;
-            selectionStatus.textContent = "";
-            video.style.cursor = "default";
-        });
     </script>
 </body>
 </html>

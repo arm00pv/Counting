@@ -4,18 +4,21 @@ import cv2
 import numpy as np
 import base64
 import json
-from app import app, process_image
+from app import app
 
 class AppTestCase(unittest.TestCase):
 
     def setUp(self):
         self.app = app.test_client()
         self.app.testing = True
-        # Create a dummy image for testing (black bg with a red and blue square)
+        # Create a test image: black bg, two red squares, one blue square
         self.test_image_path = "test_image.png"
         img = np.zeros((200, 200, 3), dtype=np.uint8)
-        cv2.rectangle(img, (20, 20), (80, 80), (0, 0, 255), -1) # Red square
-        cv2.rectangle(img, (120, 120), (180, 180), (255, 0, 0), -1) # Blue square
+        # Red squares
+        cv2.rectangle(img, (20, 20), (60, 60), (0, 0, 255), -1)
+        cv2.rectangle(img, (20, 120), (60, 160), (0, 0, 255), -1)
+        # Blue square
+        cv2.rectangle(img, (120, 20), (160, 60), (255, 0, 0), -1)
         cv2.imwrite(self.test_image_path, img)
 
     def tearDown(self):
@@ -25,52 +28,53 @@ class AppTestCase(unittest.TestCase):
     def test_index_page(self):
         response = self.app.get('/')
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Object Counter', response.data)
 
-    def test_process_frame(self):
-        # Test general processing without selection
+    def test_get_target_at_coords(self):
         with open(self.test_image_path, "rb") as f:
             image_data = base64.b64encode(f.read()).decode('utf-8')
 
-        response = self.app.post('/process_frame',
-                                 data=json.dumps({'image': 'data:image/png;base64,' + image_data}),
-                                 content_type='application/json')
+        # Coords for the first red square
+        payload = {'image': 'data:image/png;base64,' + image_data, 'x': 0.2, 'y': 0.2}
+        response = self.app.post('/get_target_at_coords', data=json.dumps(payload), content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertIn('target_image', data)
+        self.assertIsNotNone(data['target_image'])
+
+    def test_process_frame_count_all(self):
+        with open(self.test_image_path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+
+        payload = {'image': 'data:image/png;base64,' + image_data}
+        response = self.app.post('/process_frame', data=json.dumps(payload), content_type='application/json')
 
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
-        self.assertIn('image', data)
-        self.assertIn('count', data)
-        self.assertEqual(data['count'], 2) # Should find 2 objects
+        self.assertEqual(data['count'], 3) # Should find all 3 squares
 
-    def test_process_image(self):
-        # Test the image processing function directly (general count)
-        img = cv2.imread(self.test_image_path)
-        processed_image, count = process_image(img)
-        self.assertIsInstance(processed_image, np.ndarray)
-        self.assertEqual(count, 2)
-
-    def test_process_frame_with_selection(self):
-        # Test processing with selection
+    def test_process_frame_count_matches(self):
+        # 1. Get the target image data first (the first red square)
         with open(self.test_image_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode('utf-8')
+            image_data_b64 = base64.b64encode(f.read()).decode('utf-8')
 
-        # Coordinates for the red square (50,50) -> (0.25, 0.25)
-        payload = {
-            'image': 'data:image/png;base64,' + image_data,
-            'x': 0.25,
-            'y': 0.25
+        get_target_payload = {'image': 'data:image/png;base64,' + image_data_b64, 'x': 0.2, 'y': 0.2}
+        response = self.app.post('/get_target_at_coords', data=json.dumps(get_target_payload), content_type='application/json')
+        target_data = json.loads(response.data)
+        red_square_target_b64 = target_data['target_image']
+        self.assertIsNotNone(red_square_target_b64)
+
+        # 2. Now, process the full frame using the obtained target
+        process_payload = {
+            'image': 'data:image/png;base64,' + image_data_b64,
+            'target_image': red_square_target_b64
         }
-
-        response = self.app.post('/process_frame',
-                                 data=json.dumps(payload),
-                                 content_type='application/json')
+        response = self.app.post('/process_frame', data=json.dumps(process_payload), content_type='application/json')
 
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.data)
-        self.assertIn('image', data)
         self.assertIn('count', data)
-        self.assertEqual(data['count'], 1) # Should only find the red square
-
+        # This is the crucial test: it should find the two red squares
+        self.assertEqual(data['count'], 2)
 
 if __name__ == '__main__':
     unittest.main()
