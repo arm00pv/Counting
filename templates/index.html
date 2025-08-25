@@ -104,7 +104,7 @@
         let capturedImageData = null;
         let selectedTargetImgData = null;
         let drawing = false;
-        let startPos = { x: 0, y: 0 };
+        let path = [];
 
         // --- Camera Setup ---
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
@@ -156,16 +156,13 @@
             drawingCanvas.width = rect.width;
             drawingCanvas.height = rect.height;
             drawingCanvas.style.display = 'block';
-            targetStatus.textContent = "Draw a box around the target object.";
+            targetStatus.textContent = "Draw a loop around the target object.";
         });
 
         analyzeBtn.addEventListener('click', () => {
             let payload = { image: capturedImageData };
             if (selectedTargetImgData) {
                 payload.target_image = selectedTargetImgData.split(',')[1];
-            } else {
-                // If user wants to count all, no target is needed.
-                // Backend handles this by checking if target_image is None.
             }
             processFrame(payload);
         });
@@ -176,80 +173,111 @@
         });
 
         // --- Drawing Logic ---
-        function getCorrectedPos(canvas, evt) {
-            const canvasRect = canvas.getBoundingClientRect();
+        function getPos(canvas, evt) {
+            const rect = canvas.getBoundingClientRect();
             const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
             const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
-
-            // Calculate the scale factor of the displayed image vs its natural size
-            const scaleX = canvasRect.width / canvas.width;
-            const scaleY = canvasRect.height / canvas.height;
-            const scale = Math.min(scaleX, scaleY); // 'contain' scaling
-
-            // Calculate the padding (letterboxing)
-            const renderedW = canvas.width * scale;
-            const renderedH = canvas.height * scale;
-            const offsetX = (canvasRect.width - renderedW) / 2;
-            const offsetY = (canvasRect.height - renderedH) / 2;
-
-            // Adjust mouse coordinates for padding and scale
-            const correctedX = (clientX - canvasRect.left - offsetX) / scale;
-            const correctedY = (clientY - canvasRect.top - offsetY) / scale;
-
-            return { x: correctedX, y: correctedY };
+            return { x: clientX - rect.left, y: clientY - rect.top };
         }
 
         function startDrawing(e) {
             e.preventDefault();
             drawing = true;
-            startPos = getCorrectedPos(drawingCanvas, e);
+            path = [];
+            const dCtx = drawingCanvas.getContext('2d');
+            dCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            const pos = getPos(drawingCanvas, e);
+            path.push(pos);
         }
 
         function draw(e) {
             e.preventDefault(); if (!drawing) return;
-            const currentPos = getCorrectedPos(drawingCanvas, e);
             const dCtx = drawingCanvas.getContext('2d');
-            dCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
             dCtx.strokeStyle = "red"; dCtx.lineWidth = 2;
+            dCtx.lineCap = "round"; dCtx.lineJoin = "round";
 
-            // We need to draw on the scaled canvas, so we must re-scale our corrected coords
-            const canvasRect = drawingCanvas.getBoundingClientRect();
+            const pos = getPos(drawingCanvas, e);
+            path.push(pos);
+
+            dCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            dCtx.beginPath();
+            dCtx.moveTo(path[0].x, path[0].y);
+            for (let i = 1; i < path.length; i++) {
+                dCtx.lineTo(path[i].x, path[i].y);
+            }
+            dCtx.stroke();
+        }
+
+        function stopDrawing(e) {
+            e.preventDefault(); if (!drawing) return; drawing = false;
+            const dCtx = drawingCanvas.getContext('2d');
+            dCtx.closePath();
+
+            // --- CROP LOGIC ---
+            // Get the scale and offset of the displayed snapshot image
+            const canvasRect = snapshotCanvas.getBoundingClientRect();
             const scaleX = canvasRect.width / snapshotCanvas.width;
             const scaleY = canvasRect.height / snapshotCanvas.height;
             const scale = Math.min(scaleX, scaleY);
             const offsetX = (canvasRect.width - (snapshotCanvas.width * scale)) / 2;
             const offsetY = (canvasRect.height - (snapshotCanvas.height * scale)) / 2;
 
-            const drawX = (startPos.x * scale) + offsetX;
-            const drawY = (startPos.y * scale) + offsetY;
-            const drawW = (currentPos.x - startPos.x) * scale;
-            const drawH = (currentPos.y - startPos.y) * scale;
-            dCtx.strokeRect(drawX, drawY, drawW, drawH);
-        }
+            // Find the bounding box of the drawn path
+            let minX = path[0].x, minY = path[0].y, maxX = path[0].x, maxY = path[0].y;
+            for(const p of path) {
+                minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+                maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+            }
 
-        function stopDrawing(e) {
-            e.preventDefault(); if (!drawing) return; drawing = false;
-            const endPos = getCorrectedPos(drawingCanvas, e);
-
-            drawingCanvas.style.display = 'none';
-            drawingCanvas.getContext('2d').clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
-
-            const rect = {
-                x: Math.min(startPos.x, endPos.x), y: Math.min(startPos.y, endPos.y),
-                w: Math.abs(startPos.x - endPos.x), h: Math.abs(startPos.y - endPos.y)
+            // Convert path coordinates to be relative to the original image
+            const correctedPath = path.map(p => ({
+                x: (p.x - offsetX) / scale,
+                y: (p.y - offsetY) / scale
+            }));
+            const correctedBoundingBox = {
+                x: (minX - offsetX) / scale, y: (minY - offsetY) / scale,
+                w: (maxX - minX) / scale, h: (maxY - minY) / scale
             };
-            if (rect.w < 10 || rect.h < 10) { targetStatus.textContent = "Selection too small. Try again."; return; }
 
+            if (correctedBoundingBox.w < 10 || correctedBoundingBox.h < 10) {
+                targetStatus.textContent = "Selection too small. Try again.";
+                dCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+                drawingCanvas.style.display = 'none';
+                return;
+            }
+
+            // Create a canvas to hold the cropped image
             const croppedCanvas = document.createElement('canvas');
-            croppedCanvas.width = rect.w; croppedCanvas.height = rect.h;
-            // Crop from the original, unscaled snapshot canvas
-            croppedCanvas.getContext('2d').drawImage(snapshotCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+            croppedCanvas.width = correctedBoundingBox.w;
+            croppedCanvas.height = correctedBoundingBox.h;
+            const cropCtx = croppedCanvas.getContext('2d');
 
+            // Create clipping path
+            cropCtx.beginPath();
+            cropCtx.moveTo(correctedPath[0].x - correctedBoundingBox.x, correctedPath[0].y - correctedBoundingBox.y);
+            for (let i = 1; i < correctedPath.length; i++) {
+                cropCtx.lineTo(correctedPath[i].x - correctedBoundingBox.x, correctedPath[i].y - correctedBoundingBox.y);
+            }
+            cropCtx.closePath();
+            cropCtx.clip();
+
+            // Draw the selected part of the snapshot onto the cropped canvas
+            cropCtx.drawImage(snapshotCanvas,
+                correctedBoundingBox.x, correctedBoundingBox.y, correctedBoundingBox.w, correctedBoundingBox.h,
+                0, 0, correctedBoundingBox.w, correctedBoundingBox.h
+            );
+
+            // Set the cropped image as the target
             selectedTargetImgData = croppedCanvas.toDataURL('image/jpeg');
             targetPreviewImg.src = selectedTargetImgData;
             targetPreviewImg.style.display = 'inline';
             targetStatus.textContent = "Target selected. Ready to analyze.";
+
+            // Clean up drawing canvas
+            dCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+            drawingCanvas.style.display = 'none';
         }
+
         drawingCanvas.addEventListener('mousedown', startDrawing);
         drawingCanvas.addEventListener('mousemove', draw);
         drawingCanvas.addEventListener('mouseup', stopDrawing);
