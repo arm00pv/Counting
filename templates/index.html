@@ -36,6 +36,9 @@
         .controls {
             margin-bottom: 10px;
         }
+        .slider-container {
+            margin-bottom: 10px;
+        }
         .target-info {
             display: flex;
             align-items: center;
@@ -72,6 +75,11 @@
             <button id="analyze-btn" disabled>Analyze</button>
             <button id="torch-btn">Toggle Flashlight</button>
         </div>
+        <div class="slider-container">
+            <label for="sensitivity-slider">Sensitivity:</label>
+            <input type="range" id="sensitivity-slider" min="10" max="95" value="80">
+            <span id="sensitivity-value">0.80</span>
+        </div>
         <div id="target-info" class="target-info">
             <span>Target:</span>
             <img id="target-preview-img" src="" alt="Target Preview" style="display: none;">
@@ -97,6 +105,8 @@
         const torchBtn = document.getElementById('torch-btn');
         const targetPreviewImg = document.getElementById('target-preview-img');
         const targetStatus = document.getElementById('target-status');
+        const sensitivitySlider = document.getElementById('sensitivity-slider');
+        const sensitivityValue = document.getElementById('sensitivity-value');
         const processedImg = document.getElementById('processed-img');
         const objectCount = document.getElementById('object-count');
 
@@ -160,7 +170,11 @@
         });
 
         analyzeBtn.addEventListener('click', () => {
-            let payload = { image: capturedImageData };
+            const threshold = parseFloat(sensitivitySlider.value) / 100;
+            let payload = {
+                image: capturedImageData,
+                threshold: threshold
+            };
             if (selectedTargetImgData) {
                 payload.target_image = selectedTargetImgData.split(',')[1];
             }
@@ -170,6 +184,11 @@
         torchBtn.addEventListener('click', () => {
             const track = video.srcObject.getVideoTracks()[0];
             track.applyConstraints({ advanced: [{torch: !track.getSettings().torch}] }).catch(e => console.error(e));
+        });
+
+        sensitivitySlider.addEventListener('input', () => {
+            const threshold = parseFloat(sensitivitySlider.value) / 100;
+            sensitivityValue.textContent = threshold.toFixed(2);
         });
 
         // --- Drawing Logic ---
@@ -213,27 +232,18 @@
             const dCtx = drawingCanvas.getContext('2d');
             dCtx.closePath();
 
-            // --- CROP LOGIC ---
-            // Get the scale and offset of the displayed snapshot image
             const canvasRect = snapshotCanvas.getBoundingClientRect();
-            const scaleX = canvasRect.width / snapshotCanvas.width;
-            const scaleY = canvasRect.height / snapshotCanvas.height;
-            const scale = Math.min(scaleX, scaleY);
+            const scale = Math.min(canvasRect.width / snapshotCanvas.width, canvasRect.height / snapshotCanvas.height);
             const offsetX = (canvasRect.width - (snapshotCanvas.width * scale)) / 2;
             const offsetY = (canvasRect.height - (snapshotCanvas.height * scale)) / 2;
 
-            // Find the bounding box of the drawn path
-            let minX = path[0].x, minY = path[0].y, maxX = path[0].x, maxY = path[0].y;
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             for(const p of path) {
                 minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
                 maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
             }
 
-            // Convert path coordinates to be relative to the original image
-            const correctedPath = path.map(p => ({
-                x: (p.x - offsetX) / scale,
-                y: (p.y - offsetY) / scale
-            }));
+            const correctedPath = path.map(p => ({ x: (p.x - offsetX) / scale, y: (p.y - offsetY) / scale }));
             const correctedBoundingBox = {
                 x: (minX - offsetX) / scale, y: (minY - offsetY) / scale,
                 w: (maxX - minX) / scale, h: (maxY - minY) / scale
@@ -246,13 +256,11 @@
                 return;
             }
 
-            // Create a canvas to hold the cropped image
             const croppedCanvas = document.createElement('canvas');
             croppedCanvas.width = correctedBoundingBox.w;
             croppedCanvas.height = correctedBoundingBox.h;
             const cropCtx = croppedCanvas.getContext('2d');
 
-            // Create clipping path
             cropCtx.beginPath();
             cropCtx.moveTo(correctedPath[0].x - correctedBoundingBox.x, correctedPath[0].y - correctedBoundingBox.y);
             for (let i = 1; i < correctedPath.length; i++) {
@@ -261,23 +269,19 @@
             cropCtx.closePath();
             cropCtx.clip();
 
-            // Draw the selected part of the snapshot onto the cropped canvas
             cropCtx.drawImage(snapshotCanvas,
                 correctedBoundingBox.x, correctedBoundingBox.y, correctedBoundingBox.w, correctedBoundingBox.h,
                 0, 0, correctedBoundingBox.w, correctedBoundingBox.h
             );
 
-            // Set the cropped image as the target
             selectedTargetImgData = croppedCanvas.toDataURL('image/jpeg');
             targetPreviewImg.src = selectedTargetImgData;
             targetPreviewImg.style.display = 'inline';
             targetStatus.textContent = "Target selected. Ready to analyze.";
 
-            // Clean up drawing canvas
             dCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
             drawingCanvas.style.display = 'none';
         }
-
         drawingCanvas.addEventListener('mousedown', startDrawing);
         drawingCanvas.addEventListener('mousemove', draw);
         drawingCanvas.addEventListener('mouseup', stopDrawing);
