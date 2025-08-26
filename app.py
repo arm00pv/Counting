@@ -77,6 +77,13 @@ def cosine_similarity(v1, v2):
     return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
 
 def process_image(main_img, target_img_data=None, threshold=0.8):
+    # To reduce memory usage on the server, resize the main image
+    MAX_WIDTH = 640
+    if main_img.shape[1] > MAX_WIDTH:
+        scale = MAX_WIDTH / main_img.shape[1]
+        new_h = int(main_img.shape[0] * scale)
+        main_img = cv2.resize(main_img, (MAX_WIDTH, new_h))
+
     # If no target, perform a general count
     if target_img_data is None:
         gray = cv2.cvtColor(main_img, cv2.COLOR_BGR2GRAY)
