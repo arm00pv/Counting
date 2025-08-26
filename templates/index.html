@@ -77,8 +77,8 @@
         </div>
         <div class="slider-container">
             <label for="sensitivity-slider">Sensitivity:</label>
-            <input type="range" id="sensitivity-slider" min="10" max="95" value="80">
-            <span id="sensitivity-value">0.80</span>
+            <input type="range" id="sensitivity-slider" min="80" max="99" value="95">
+            <span id="sensitivity-value">0.95</span>
         </div>
         <div id="target-info" class="target-info">
             <span>Target:</span>
@@ -244,9 +244,12 @@
             }
 
             const correctedPath = path.map(p => ({ x: (p.x - offsetX) / scale, y: (p.y - offsetY) / scale }));
+
             const correctedBoundingBox = {
-                x: (minX - offsetX) / scale, y: (minY - offsetY) / scale,
-                w: (maxX - minX) / scale, h: (maxY - minY) / scale
+                x: correctedPath.reduce((min, p) => Math.min(min, p.x), Infinity),
+                y: correctedPath.reduce((min, p) => Math.min(min, p.y), Infinity),
+                w: correctedPath.reduce((max, p) => Math.max(max, p.x), -Infinity) - correctedPath.reduce((min, p) => Math.min(min, p.x), Infinity),
+                h: correctedPath.reduce((max, p) => Math.max(max, p.y), -Infinity) - correctedPath.reduce((min, p) => Math.min(min, p.y), Infinity)
             };
 
             if (correctedBoundingBox.w < 10 || correctedBoundingBox.h < 10) {

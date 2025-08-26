@@ -16,7 +16,6 @@ import torch.nn as nn
 class FeatureExtractor:
     def __init__(self):
         # Use a pre-trained ResNet-18 model
-        # Using weights instead of pretrained=True for newer torchvision versions
         self.model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
         # Remove the final classification layer
         self.model = nn.Sequential(*list(self.model.children())[:-1])
@@ -32,21 +31,18 @@ class FeatureExtractor:
         ])
 
     def extract_features(self, img):
-        # Convert OpenCV image (BGR) to PIL image (RGB)
         try:
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(img_rgb)
         except cv2.error:
-            return None # Handle cases where the image is invalid
+            return None
 
-        # Apply transformations and get the feature vector
         img_t = self.transform(pil_img)
         batch_t = torch.unsqueeze(img_t, 0)
 
         with torch.no_grad():
             features = self.model(batch_t)
 
-        # Flatten the features to a 1D vector and convert to numpy
         return features.squeeze().numpy()
 
 # Instantiate the feature extractor once when the app starts
@@ -54,11 +50,6 @@ feature_extractor = FeatureExtractor()
 
 # --- Flask App ---
 app = Flask(__name__)
-
-# Configure upload folder and allowed extensions
-UPLOAD_FOLDER = 'static/uploads'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 @app.route('/')
 def index():
@@ -99,7 +90,6 @@ def process_image(main_img, target_img_data=None, threshold=0.8):
 
     # --- If a target is provided, perform Deep Learning Feature Matching ---
 
-    # Decode the target image and extract its features
     target_bytes = base64.b64decode(target_img_data)
     target_nparr = np.frombuffer(target_bytes, np.uint8)
     target_img = cv2.imdecode(target_nparr, cv2.IMREAD_COLOR)
@@ -108,7 +98,6 @@ def process_image(main_img, target_img_data=None, threshold=0.8):
     target_features = feature_extractor.extract_features(target_img)
     if target_features is None: return main_img, 0
 
-    # Find all contours in the main image
     gray = cv2.cvtColor(main_img, cv2.COLOR_BGR2GRAY)
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -117,14 +106,11 @@ def process_image(main_img, target_img_data=None, threshold=0.8):
     match_count = 0
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        # Crop the region of interest (ROI) from the main image
         roi = main_img[y:y+h, x:x+w]
 
-        # Extract features from the ROI
         roi_features = feature_extractor.extract_features(roi)
         if roi_features is None: continue
 
-        # Compare feature vectors using cosine similarity
         similarity = cosine_similarity(target_features, roi_features)
 
         if similarity > threshold:
