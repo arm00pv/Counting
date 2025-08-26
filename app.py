@@ -15,10 +15,10 @@ import torch.nn as nn
 # --- Feature Extractor Class ---
 class FeatureExtractor:
     def __init__(self):
-        # Use a pre-trained ResNet-18 model
-        self.model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-        # Remove the final classification layer
-        self.model = nn.Sequential(*list(self.model.children())[:-1])
+        # Use a pre-trained MobileNetV2 model, which is much lighter than ResNet
+        self.model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
+        # We use the features part of the model, not the classifier
+        self.model.classifier = nn.Identity()
         # Set to evaluation mode
         self.model.eval()
 
