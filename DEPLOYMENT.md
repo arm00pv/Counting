@@ -2,16 +2,18 @@
 
 This guide provides step-by-step instructions for deploying the Object Counter application to a DigitalOcean Droplet running Ubuntu, using **Apache** as the reverse proxy.
 
+This guide has been personalized with the configuration details you provided.
+
 ## Prerequisites
-- A DigitalOcean account.
-- A Droplet with at least 2 GB of RAM is recommended.
-- A domain name pointed at your Droplet's IP address (for setting up HTTPS with Let's Encrypt).
+- A DigitalOcean account and a Droplet with at least 2 GB of RAM.
+- Your domain `counting.sytes.net` pointed at your Droplet's IP address `159.203.138.32`.
+- Your project code cloned into `/var/www/html/Counting/`.
 
 ---
 
 ### Step 1: Initial Server Setup
 
-First, SSH into your new Droplet as the `root` user. Then, update your server and install the necessary system packages.
+First, SSH into your Droplet. Then, update your server and install the necessary system packages.
 
 ```bash
 # Update package lists and upgrade existing packages
@@ -30,13 +32,11 @@ sudo systemctl restart apache2
 
 ### Step 2: Application Code Setup
 
-Next, get the application code onto your server and set up its Python environment.
+Your code is already cloned. The next steps are to set up the Python environment and its ownership. The `www-data` user needs to own the project files to run the application securely.
 
 ```bash
-# Clone the repository
-# Make sure to use the correct branch, e.g., final-version
-git clone https://github.com/arm00pv/Counting
-cd Counting
+# Navigate to your project directory
+cd /var/www/html/Counting
 
 # Create a Python virtual environment
 python3 -m venv venv
@@ -46,19 +46,23 @@ source venv/bin/activate
 
 # Install the Python dependencies
 pip install -r requirements.txt
+
+# Set ownership for the web server user
+# Deactivate virtualenv first before running chown
+deactivate
+sudo chown -R www-data:www-data /var/www/html/Counting
 ```
 
 ### Step 3: Create a systemd Service File
 
-This will ensure your application runs as a service, automatically starting on boot and restarting if it crashes. This step is the same as the Nginx setup.
+This will ensure your application runs as a service, automatically starting on boot and restarting if it crashes.
 
-Create a new service file using a text editor like `nano`:
+Create a new service file:
 ```bash
 sudo nano /etc/systemd/system/object-counter.service
 ```
 
-Paste the following content into the file.
-**Important:** Make sure to replace `/root/Counting` with the actual path to your project directory. You can find this by running `pwd` inside the `Counting` directory.
+Paste the following content into the file. It has been updated with your specific paths and the recommended `www-data` user.
 
 ```ini
 [Unit]
@@ -66,11 +70,11 @@ Description=Gunicorn instance to serve the Object Counter app
 After=network.target
 
 [Service]
-User=root
+User=www-data
 Group=www-data
-WorkingDirectory=/root/Counting
-Environment="PATH=/root/Counting/venv/bin"
-ExecStart=/root/Counting/venv/bin/gunicorn --workers 3 --bind unix:object-counter.sock -m 007 --timeout 120 app:app
+WorkingDirectory=/var/www/html/Counting
+Environment="PATH=/var/www/html/Counting/venv/bin"
+ExecStart=/var/www/html/Counting/venv/bin/gunicorn --workers 3 --bind unix:object-counter.sock -m 007 --timeout 120 app:app
 
 [Install]
 WantedBy=multi-user.target
@@ -84,22 +88,20 @@ sudo systemctl enable object-counter
 
 ### Step 4: Configure Apache as a Reverse Proxy
 
-Apache will act as the public-facing web server and pass requests to your Gunicorn application via the Unix socket.
-
-Create a new Apache configuration file:
+Create a new Apache configuration file for your site:
 ```bash
 sudo nano /etc/apache2/sites-available/object-counter.conf
 ```
 
-Paste in the following configuration. **Replace `your_domain_or_ip` with your server's IP address or your domain name.**
+Paste in the following configuration, which has been updated with your domain and socket path.
 
 ```apache
 <VirtualHost *:80>
-    ServerName your_domain_or_ip
+    ServerName counting.sytes.net
 
     ProxyPreserveHost On
-    ProxyPass / unix:/root/Counting/object-counter.sock|http://localhost/
-    ProxyPassReverse / unix:/root/Counting/object-counter.sock|http://localhost/
+    ProxyPass / unix:/var/www/html/Counting/object-counter.sock|http://localhost/
+    ProxyPassReverse / unix:/var/www/html/Counting/object-counter.sock|http://localhost/
 </VirtualHost>
 ```
 
@@ -122,12 +124,10 @@ Allow Apache traffic through the firewall:
 sudo ufw allow 'Apache Full'
 ```
 
-At this point, you should be able to access your application at `http://your_domain_or_ip`.
+At this point, you should be able to access your application at `http://counting.sytes.net`.
 
 ### Crucial Final Step: HTTPS/SSL
 
-Because the application uses the device camera, it **must** be served over a secure HTTPS connection. The easiest way to set this up is with Let's Encrypt and Certbot.
+Because the application uses the device camera, it **must** be served over a secure HTTPS connection. Use Let's Encrypt and Certbot to secure your site for free.
 
-DigitalOcean has an excellent tutorial on this process for Apache: [How To Secure Apache with Let's Encrypt on Ubuntu](https://www.digitalocean.com/community/tutorials/how-to-secure-apache-with-let-s-encrypt-on-ubuntu-22-04).
-
-Following that guide will install a free SSL certificate and automatically configure Apache to use it, completing your secure deployment.
+DigitalOcean has an excellent tutorial for this: [How To Secure Apache with Let's Encrypt on Ubuntu](https://www.digitalocean.com/community/tutorials/how-to-secure-apache-with-let-s-encrypt-on-ubuntu-22-04). When you run `sudo certbot --apache`, it will automatically detect your `counting.sytes.net` configuration and set up SSL.
